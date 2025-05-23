@@ -7,9 +7,9 @@
 #include "pico/cyw43_arch.h"     // Biblioteca para arquitetura Wi-Fi da Pico com CYW43
 #include "pico/bootrom.h"
 
+#include "hardware/pwm.h"
 #include "hardware/adc.h"
 #include "hardware/i2c.h"
-
 #include "lwip/pbuf.h"           // Lightweight IP stack - manipulação de buffers de pacotes de rede
 #include "lwip/tcp.h"            // Lightweight IP stack - fornece funções e estruturas para trabalhar com o protocolo TCP
 #include "lwip/netif.h"          // Lightweight IP stack - fornece funções e estruturas para trabalhar com interfaces de rede (netif)
@@ -18,10 +18,14 @@
 #include "src/webserver.h"
 #include "lib/ws2812.h"
 #include "ws2812.pio.h"
+#include "webserver.h"
+
+static uint buzzer_slice;
+static bool buzzer_pwm_initialized = false;
 
 // Credenciais WIFI - Troque pelas suas credenciais
-#define WIFI_SSID "Silvia Helena"
-#define WIFI_PASSWORD "milinha1"
+#define WIFI_SSID "Lucas"
+#define WIFI_PASSWORD "outubro1999"
 
 // ----------------------------- Escopo de funções ------------------------------
 
@@ -35,7 +39,7 @@ void setup_button(uint pin);
 
 
 int main() {
-    // Configurações
+    // Configurações iniciais
     stdio_init_all();
     srand(time(NULL));
     gpio_led_bitdog();
@@ -43,71 +47,95 @@ int main() {
     setup_display();
     setup_matrix();
 
-    // Inicializa a arquitetura do cyw43
-    while (cyw43_arch_init()) {
+    // Inicializa ADC para o joystick
+    adc_init();
+    adc_gpio_init(ADC_JOYSTICK_X);
+    adc_gpio_init(ADC_JOYSTICK_Y);
+    adc_set_round_robin(0);
+        
+    // Inicializa buzzer
+    gpio_init(BUZZER_PIN);
+    gpio_set_dir(BUZZER_PIN, GPIO_OUT);
+
+    // Inicializa Wi-Fi
+    if (cyw43_arch_init()) {
         printf("Falha ao inicializar Wi-Fi\n");
-        sleep_ms(100);
         return -1;
     }
+    sleep_ms(1000);  // Espera para estabilização
 
-    // GPIO do CI CYW43 em nível baixo
     cyw43_arch_gpio_put(LED_PIN, 0);
-
-    // Ativa o Wi-Fi no modo Station, de modo a que possam ser feitas ligações a outros pontos de acesso Wi-Fi.
     cyw43_arch_enable_sta_mode();
 
-    // Conectar à rede WiFI - fazer um loop até que esteja conectado
+    // Conexão ao Wi-Fi
     printf("Conectando ao Wi-Fi...\n");
-    while (cyw43_arch_wifi_connect_timeout_ms(WIFI_SSID, WIFI_PASSWORD, CYW43_AUTH_WPA2_AES_PSK, 20000)) {
+    if (cyw43_arch_wifi_connect_timeout_ms(WIFI_SSID, WIFI_PASSWORD, CYW43_AUTH_WPA2_AES_PSK, 20000)) {
         printf("Falha ao conectar ao Wi-Fi\n");
-        sleep_ms(100);
+        cyw43_arch_deinit();
         return -1;
     }
     printf("Conectado ao Wi-Fi\n");
 
-    // Caso seja a interface de rede padrão - imprimir o IP do dispositivo.
     if (netif_default) {
         printf("IP do dispositivo: %s\n", ipaddr_ntoa(&netif_default->ip_addr));
     }
 
     webserver_init();
 
+    // Loop principal
     while (true) {
-        /* 
-        * Efetuar o processamento exigido pelo cyw43_driver ou pela stack TCP/IP.
-        * Este método deve ser chamado periodicamente a partir do ciclo principal 
-        * quando se utiliza um estilo de sondagem pico_cyw43_arch 
-        */
-        cyw43_arch_poll(); // Necessário para manter o Wi-Fi ativo
+        cyw43_arch_poll();
         
+        // Leitura do joystick
+        adc_select_input(0);
+        uint16_t x_raw = adc_read();
+        temperatura = (x_raw * 50) / 4095;
+
+        adc_select_input(1);
+        uint16_t y_raw = adc_read();
+        umidade = (y_raw * 100) / 4095;
+
+        // Controle do buzzer
+        // Substitua APENAS esta parte no loop while(true):
+        if (buzzer_ligado) {
+            if (!buzzer_pwm_initialized) {
+                // Configura PWM apenas uma vez
+                gpio_set_function(BUZZER_PIN, GPIO_FUNC_PWM);
+                buzzer_slice = pwm_gpio_to_slice_num(BUZZER_PIN);
+                pwm_config config = pwm_get_default_config();
+                pwm_config_set_wrap(&config, 15000);  // Frequência ~1kHz
+                pwm_init(buzzer_slice, &config, true);
+                pwm_set_gpio_level(BUZZER_PIN, 110);  // 50% duty cycle
+                buzzer_pwm_initialized = true;
+            }
+        } else {
+            if (buzzer_pwm_initialized) {
+                pwm_set_gpio_level(BUZZER_PIN, 0);  // Desliga o som
+            } else {
+                gpio_put(BUZZER_PIN, 0);  // Garante desligado
+            }
+        }
+
         update_display();
-
-        if ((temperatura > 60) || (umidade > 70) || (oxigenio < 15)) {
-            gpio_put(LED_RED_PIN, 1);
-            gpio_put(LED_GREEN_PIN, 0);
-            gpio_put(LED_BLUE_PIN, 0);
-        }
-        else if ((40 < temperatura && temperatura < 60) && (50 < umidade && umidade < 70) && (oxigenio > 15)) {
-            gpio_put(LED_RED_PIN, 0);
-            gpio_put(LED_GREEN_PIN, 1);
-            gpio_put(LED_BLUE_PIN, 0);
-        }
-        else {
-            gpio_put(LED_RED_PIN, 0);
-            gpio_put(LED_GREEN_PIN, 0);
-            gpio_put(LED_BLUE_PIN, 1);
-        }
-
-        sleep_ms(1000);
+        sleep_ms(100);
     }
 
-    // Desligar a arquitetura CYW43
+    // Esta parte nunca será alcançada devido ao loop infinito,
+    // mas é boa prática manter para estruturação do código
     cyw43_arch_deinit();
     return 0;
 }
 
-
 // ---------------------------------- Funções ------------------------------------
+
+void buzzer_beep() {
+    for(int i = 0; i < 50; i++) {
+        gpio_put(BUZZER_PIN, 1);
+        sleep_us(500);
+        gpio_put(BUZZER_PIN, 0);
+        sleep_us(500);
+    }
+}
 
 void buttons_irq(uint gpio, uint32_t events) {
     uint32_t current_time = to_us_since_boot(get_absolute_time());
@@ -129,9 +157,6 @@ void update_display() {
     char msg_umid[20];
     sprintf(msg_umid, "Umidade %d", umidade);
     ssd1306_draw_string(&ssd, msg_umid, 8, 20);
-    char msg_oxig[20];
-    sprintf(msg_oxig, "Oxigenio %d", oxigenio);
-    ssd1306_draw_string(&ssd, msg_oxig, 8, 34);
     
     ssd1306_send_data(&ssd);
     sleep_ms(735);

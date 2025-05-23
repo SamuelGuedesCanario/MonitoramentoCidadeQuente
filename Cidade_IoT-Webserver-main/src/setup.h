@@ -12,7 +12,7 @@
 #define LED_GREEN_PIN 11
 
 #define BUTTON_B 6
-#define DEBOUNCE_TIME 200000        // Tempo para debounce em ms
+#define DEBOUNCE_TIME 200000        // Tempo para debounce em us (microssegundos)
 static uint32_t last_time_B = 0;    // Tempo da última interrupção do botão B
 
 #define BUZZER_PIN 10
@@ -28,8 +28,16 @@ extern uint sm;
 extern ssd1306_t ssd;
 extern bool cor;
 
+// Pinos do joystick (ADC)
+#define ADC_JOYSTICK_X 26  // Pino GP26 (ADC0)
+#define ADC_JOYSTICK_Y 27  // Pino GP27 (ADC1)
+
+// Variáveis de sensor
 extern int temperatura;
 extern int umidade;
 extern int oxigenio;
+
+// Estado do buzzer
+extern bool buzzer_ligado;
 
 #endif

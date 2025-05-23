@@ -48,6 +48,7 @@ target_link_libraries(${PROJECT_NAME}
         hardware_adc
         hardware_i2c
         hardware_pio
+        hardware_pwm
         pico_cyw43_arch_lwip_threadsafe_background
 )
 
